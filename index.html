@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>COUNTRYBALLZ - REAL MULTIPLAYER</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background: #000; }
+        
+        /* --- HOMEPAGE --- */
+        #menu-screen {
+            position: absolute; width: 100%; height: 100%;
+            background: linear-gradient(45deg, #111, #444);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            z-index: 100; color: #00ffcc; text-align: center;
+        }
+        .ui-card { background: rgba(0,0,0,0.8); padding: 40px; border: 3px solid #00ffcc; border-radius: 20px; box-shadow: 0 0 20px #00ffcc; }
+        input { padding: 12px; margin: 10px; border-radius: 5px; border: none; font-size: 16px; width: 250px; outline: none; }
+        
+        .upload-label { display: block; margin: 10px; color: #fff; cursor: pointer; background: #333; padding: 10px; border-radius: 5px; border: 1px dashed #00ffcc; }
+        #skinUpload { display: none; }
+
+        button { padding: 15px 30px; background: #00ffcc; color: #000; border: none; font-weight: bold; cursor: pointer; border-radius: 10px; font-size: 18px; transition: 0.3s; margin-top: 10px; }
+        button:hover { transform: scale(1.1); background: #fff; }
+
+        /* --- HUD --- */
+        #hud { position: absolute; top: 20px; left: 20px; color: white; text-shadow: 2px 2px #000; display: none; z-index: 10; pointer-events: none; }
+        #side-panel { position: absolute; top: 20px; right: 20px; width: 220px; background: rgba(40, 44, 52, 0.9); color: white; padding: 15px; border-radius: 15px; display: none; border: 1px solid #555; }
+        .stat { color: gold; font-weight: bold; }
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; background: white; border-radius: 50%; transform: translate(-50%, -50%); display: none; }
+        
+        /* Death Flash */
+        #death-screen { position: absolute; width:100%; height:100%; background: rgba(255,0,0,0.5); display:none; z-index:200; pointer-events:none; align-items:center; justify-content:center; color:white; font-size:40px; font-weight:bold; }
+    </style>
+</head>
+<body>
+
+    <div id="death-screen">WASTED - RESPAWNING IN DESERT</div>
+
+    <div id="menu-screen">
+        <div class="ui-card">
+            <h1>COUNTRYBALLZ</h1>
+            <p>REAL-TIME MULTIPLAYER</p>
+            <input type="text" id="username" placeholder="Enter Nickname...">
+            <br>
+            <label class="upload-label" for="skinUpload">📁 UPLOAD FLAG SKIN</label>
+            <input type="file" id="skinUpload" accept="image/*">
+            <div id="file-status" style="font-size:12px; color:#00ffcc;">No flag selected</div>
+            <br>
+            <button onclick="initGame()">JOIN SERVER</button>
+        </div>
+    </div>
+
+    <div id="hud">
+        <b style="font-size: 28px; color: #00ffcc;">COUNTRYBALLZ</b><br>
+        Player: <span id="pName">User</span><br>
+        Coins: <span id="pCoins" class="stat">1000</span> 🪙<br>
+        Army: <span id="pArmy" class="stat">0</span> Bots<br>
+        <small>[P] View | [K] Shop | [C] ATTACK PLAYERS</small>
+    </div>
+    <div id="crosshair"></div>
+
+    <div id="side-panel">
+        <b style="font-size: 18px;">Online Friends</b><hr>
+        <div id="player-list"></div>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        const firebaseConfig = { databaseURL: "https://countryballz-default-rtdb.firebaseio.com/" };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        let scene, camera, renderer, playerBall, myId, userTexture = null;
+        let otherPlayers = {}; 
+        let keys = {}, yaw = 0, pitch = 0, isThirdPerson = false;
+        let coins = 1000, armyBots = [], targetId = null;
+
+        document.getElementById('skinUpload').onchange = function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = e => { userTexture = e.target.result; };
+                reader.readAsDataURL(file);
+            }
+        };
+
+        function initGame() {
+            const name = document.getElementById('username').value || "Player";
+            myId = name + "_" + Math.floor(Math.random()*9999);
+            document.getElementById('pName').innerText = name;
+            document.getElementById('menu-screen').style.display = 'none';
+            document.getElementById('hud').style.display = 'block';
+            document.getElementById('side-panel').style.display = 'block';
+            document.getElementById('crosshair').style.display = 'block';
+            setup3D();
+            startMultiplayer();
+        }
+
+        function setup3D() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 2000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1.5);
+            scene.add(light);
+
+            // Biomes
+            createFloor(0, 0, 1000, 0x32cd32); // Forest
+            createFloor(1000, 0, 1000, 0xedc9af); // Desert
+            createFloor(-1000, 0, 1000, 0x0044ff); // Ocean
+
+            playerBall = createBallMesh(0x00ffcc, userTexture);
+            scene.add(playerBall);
+
+            // Buy Army bots by default for testing
+            for(let i=0; i<3; i++) {
+                let bot = createBallMesh(0x555555, null);
+                bot.scale.set(0.5, 0.5, 0.5);
+                scene.add(bot);
+                armyBots.push(bot);
+            }
+
+            window.addEventListener('keydown', e => { 
+                keys[e.code] = true; 
+                if(e.code === 'KeyC') findTarget();
+                if(e.code === 'KeyP') isThirdPerson = !isThirdPerson;
+            });
+            window.addEventListener('keyup', e => keys[e.code] = false);
+            renderer.domElement.onclick = () => renderer.domElement.requestPointerLock();
+            
+            document.addEventListener('mousemove', e => {
+                if(document.pointerLockElement) {
+                    yaw -= e.movementX * 0.003;
+                    pitch = Math.max(-1.5, Math.min(1.5, pitch - e.movementY * 0.003));
+                }
+            });
+            renderLoop();
+        }
+
+        function createBallMesh(color, textureData) {
+            const group = new THREE.Group();
+            const mat = new THREE.MeshLambertMaterial({color: textureData ? 0xffffff : color});
+            if(textureData) mat.map = new THREE.TextureLoader().load(textureData);
+            const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), mat);
+            ball.position.y = 1; group.add(ball);
+            return group;
+        }
+
+        function createFloor(x, z, size, color) {
+            const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshLambertMaterial({color}));
+            mesh.rotation.x = -Math.PI/2; mesh.position.set(x, 0, z);
+            scene.add(mesh);
+        }
+
+        function findTarget() {
+            let closestDist = 50;
+            targetId = null;
+            for(let id in otherPlayers) {
+                let d = playerBall.position.distanceTo(otherPlayers[id].position);
+                if(d < closestDist) { closestDist = d; targetId = id; }
+            }
+            if(targetId) alert("ARMY ATTACKING: " + targetId);
+        }
+
+        function startMultiplayer() {
+            const playerRef = db.ref('players/' + myId);
+            
+            setInterval(() => {
+                playerRef.update({
+                    x: playerBall.position.x,
+                    z: playerBall.position.z,
+                    yaw: yaw,
+                    name: document.getElementById('pName').innerText
+                });
+            }, 50);
+
+            // Listen for Death
+            playerRef.child('dead').on('value', snap => {
+                if(snap.val() === true) {
+                    playerBall.position.set(1000, 1, 0); // Teleport to Desert
+                    document.getElementById('death-screen').style.display = 'flex';
+                    setTimeout(() => {
+                        document.getElementById('death-screen').style.display = 'none';
+                        playerRef.update({dead: false});
+                    }, 2000);
+                }
+            });
+
+            db.ref('players').on('value', snapshot => {
+                const data = snapshot.val();
+                for(let id in data) {
+                    if(id === myId) continue;
+                    if(!otherPlayers[id]) {
+                        otherPlayers[id] = createBallMesh(0xff0000, null);
+                        scene.add(otherPlayers[id]);
+                    }
+                    otherPlayers[id].position.x = data[id].x;
+                    otherPlayers[id].position.z = data[id].z;
+                }
+            });
+            playerRef.onDisconnect().remove();
+        }
+
+        function renderLoop() {
+            requestAnimationFrame(renderLoop);
+            const speed = 0.2;
+            camera.rotation.set(pitch, yaw, 0, 'YXZ');
+            const forward = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
+            forward.y = 0; forward.normalize();
+            const right = new THREE.Vector3(1,0,0).applyQuaternion(camera.quaternion);
+            right.y = 0; right.normalize();
+
+            if(keys['KeyW']) playerBall.position.addScaledVector(forward, speed);
+            if(keys['KeyS']) playerBall.position.addScaledVector(forward, -speed);
+            if(keys['KeyA']) playerBall.position.addScaledVector(right, -speed);
+            if(keys['KeyD']) playerBall.position.addScaledVector(right, speed);
+
+            // Army Attack Logic
+            armyBots.forEach((bot, i) => {
+                let goal = new THREE.Vector3(playerBall.position.x + (i*2-2), 1, playerBall.position.z + 2);
+                if(targetId && otherPlayers[targetId]) {
+                    goal = otherPlayers[targetId].position;
+                    if(bot.position.distanceTo(goal) < 1.5) {
+                        db.ref('players/' + targetId).update({dead: true});
+                        targetId = null;
+                    }
+                }
+                bot.position.lerp(goal, 0.1);
+            });
+
+            if(isThirdPerson) {
+                const offset = new THREE.Vector3(0, 5, 12).applyQuaternion(camera.quaternion);
+                camera.position.copy(playerBall.position).add(offset);
+            } else {
+                camera.position.set(playerBall.position.x, playerBall.position.y + 0.8, playerBall.position.z);
+            }
+            playerBall.rotation.y = yaw;
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
